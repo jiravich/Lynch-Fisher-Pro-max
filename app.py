@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -59,16 +60,22 @@ def _get_user_db() -> UserWorkspaceDB:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _load_stock_data_cached(ticker: str, refresh_nonce: int = 0) -> dict[str, Any]:
+def _load_stock_data_cached(
+    ticker: str, refresh_nonce: int = 0, allow_network: bool = True
+) -> dict[str, Any]:
     fetcher = _get_fetcher()
-    return fetcher.get_stock_data(ticker, force_refresh=(refresh_nonce > 0))
+    return fetcher.get_stock_data(
+        ticker, force_refresh=(refresh_nonce > 0), allow_network=allow_network
+    )
 
 
 def _analyze_with_db(
-    ticker: str, refresh_nonce: int = 0
+    ticker: str, refresh_nonce: int = 0, allow_network: bool = True
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     db = _get_user_db()
-    stock_data = _load_stock_data_cached(ticker, refresh_nonce=refresh_nonce)
+    stock_data = _load_stock_data_cached(
+        ticker, refresh_nonce=refresh_nonce, allow_network=allow_network
+    )
     override = db.get_category_override(ticker)
     analysis = analyze_stock(stock_data, category_override=override)
     return stock_data, analysis
@@ -240,11 +247,13 @@ def main() -> None:
         cs = analysis.get("cache_status", {})
         p_dt = str(cs.get("price_fetched_at", ""))[:16].replace("T", " ")
         s_dt = str(cs.get("statements_fetched_at", ""))[:16].replace("T", " ")
+        d_src = str(cs.get("data_source", "unknown")).upper()
         st.markdown(
             f"<div style='margin-top:1.25rem;padding-top:0.75rem;border-top:1px solid {PALETTE['hairline']};"
             f"font-size:0.71rem;color:{PALETTE['text_muted']};font-family:IBM Plex Mono,monospace;'>"
-            f"<div>PRICE CACHE: {'HIT' if cs.get('price_cached') else 'FRESH'} ({p_dt})</div>"
-            f"<div style='margin-top:3px;'>STMTS CACHE: {'HIT' if cs.get('statements_cached') else 'FRESH'} ({s_dt})</div>"
+            f"<div>SOURCE: {d_src}</div>"
+            f"<div style='margin-top:3px;'>PRICE: {'HIT' if cs.get('price_cached') else 'LIVE'} ({p_dt})</div>"
+            f"<div style='margin-top:3px;'>STMTS: {'HIT' if cs.get('statements_cached') else 'LIVE'} ({s_dt})</div>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -257,6 +266,18 @@ def main() -> None:
         fisher_total=fisher_summary["total_score"],
         fisher_assessed=fisher_summary["assessed_count"],
     )
+
+    if analysis.get("cache_status", {}).get("data_source") in {"stale_cache", "seed_snapshot"}:
+        st.markdown(
+            f"<div style='margin-top:0.55rem;padding:0.42rem 0.8rem;border-left:3px solid {PALETTE['amber']};"
+            f"background:rgba(217,119,6,0.06);border-top:1px solid rgba(217,119,6,0.18);"
+            f"border-right:1px solid rgba(217,119,6,0.18);border-bottom:1px solid rgba(217,119,6,0.18);"
+            f"font-size:0.78rem;color:{PALETTE['text_muted']};'>"
+            f"<span style='color:{PALETTE['amber']};font-weight:600;'>FALLBACK DATA:</span> "
+            f"Yahoo Finance ถูกจำกัดอัตราการเรียกจาก Cloud IP ชั่วคราว ระบบกำลังแสดงข้อมูลจากแคชล่าสุด/ฐานข้อมูลตั้งต้น (Snapshot) กด Refresh เพื่อลองดึงใหม่"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
     cls = analysis["classification"]
     ov_col1, ov_col2, ov_col3 = st.columns([0.46, 0.24, 0.30], gap="medium")
@@ -438,7 +459,7 @@ def main() -> None:
         "ตารางเปรียบเทียบเชิงปริมาณและคุณภาพเทียบกลุ่ม",
     )
 
-    peer_add_c1, peer_add_c2 = st.columns([0.40, 0.60], gap="medium")
+    peer_add_c1, peer_add_c2 = st.columns([0.52, 0.48], gap="medium")
     with peer_add_c1:
         with st.form("add_peer_form", clear_on_submit=True):
             p_in_col, p_btn_col = st.columns([0.66, 0.34], gap="small")
@@ -454,6 +475,21 @@ def main() -> None:
             sym_clean = peer_sym.strip().upper()
             if sym_clean not in st.session_state["extra_peers"]:
                 st.session_state["extra_peers"].append(sym_clean)
+            try:
+                _load_stock_data_cached(sym_clean, refresh_nonce=0, allow_network=True)
+            except Exception:
+                pass
+            st.rerun()
+    with peer_add_c2:
+        if st.button("Refresh Peers", key="refresh_peers_btn"):
+            fetcher = _get_fetcher()
+            for pt in [t for t in watchlist_tickers + st.session_state["extra_peers"] if t != active_ticker][:10]:
+                try:
+                    fetcher.get_stock_data(pt, force_refresh=True, allow_network=True)
+                    time.sleep(0.4)
+                except Exception:
+                    continue
+            _load_stock_data_cached.clear()
             st.rerun()
 
     compare_tickers: list[str] = []
@@ -467,7 +503,7 @@ def main() -> None:
             if pt == active_ticker:
                 p_res = analysis
             else:
-                _, p_res = _analyze_with_db(pt, refresh_nonce=0)
+                _, p_res = _analyze_with_db(pt, refresh_nonce=0, allow_network=False)
             p_fs = db.get_fisher_summary(pt)
             is_fin = p_res["sector_overlay"]["overlay"] == "financials"
             cap_eff = (
