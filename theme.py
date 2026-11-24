@@ -14,6 +14,8 @@ from urllib.parse import quote_plus
 import plotly.graph_objects as go
 import streamlit as st
 
+from core.data_fetcher import get_currency_symbol
+
 PALETTE: dict[str, str] = {
     "bg": "#0A0C0F",
     "surface": "#111419",
@@ -135,6 +137,32 @@ def format_threshold_value(value: float, fmt_type: str) -> str:
     if fmt_type == "ratio_x":
         return f"{value:.2f}x"
     return f"{value:.2f}"
+
+
+def format_price(value: float | None, currency_code: str | None = "USD") -> str:
+    """Format share price or fair value with dynamic currency symbol."""
+    if value is None:
+        return "N/A"
+    sym = get_currency_symbol(currency_code)
+    return f"{sym}{value:,.2f}"
+
+
+def format_compact_money(value: float | None, currency_code: str | None = "USD") -> str:
+    """Format large financial figures compactly (e.g., ฿142.5B, $48.2B, -$1.2B)."""
+    if value is None:
+        return "N/A"
+    sym = get_currency_symbol(currency_code)
+    sign = "-" if value < 0 else ""
+    abs_v = abs(value)
+    if abs_v >= 1e12:
+        return f"{sign}{sym}{abs_v / 1e12:,.2f}T"
+    if abs_v >= 1e9:
+        return f"{sign}{sym}{abs_v / 1e9:,.1f}B"
+    if abs_v >= 1e6:
+        return f"{sign}{sym}{abs_v / 1e6:,.1f}M"
+    if abs_v >= 1e3:
+        return f"{sign}{sym}{abs_v / 1e3:,.1f}K"
+    return f"{sign}{sym}{abs_v:,.0f}"
 
 
 def inject_theme_css() -> None:
@@ -783,6 +811,97 @@ def inject_theme_css() -> None:
             line-height: 1.35;
         }}
 
+        /* Quick-Pick horizontal single-row chips */
+        .st-key-quick_pick_strip,
+        .st-key-quick_pick_strip > div,
+        .st-key-quick_pick_strip [data-testid="stHorizontalBlock"],
+        .st-key-quick_pick_strip [data-testid="stLayoutWrapper"] {{
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+            gap: 0.45rem !important;
+            padding: 0.15rem 0 0.45rem 0 !important;
+            width: 100% !important;
+        }}
+        .st-key-quick_pick_strip ::-webkit-scrollbar {{
+            display: none;
+        }}
+        .st-key-quick_pick_strip .stElementContainer,
+        .st-key-quick_pick_strip .stButton {{
+            flex: 0 0 auto !important;
+            width: auto !important;
+            min-width: max-content !important;
+        }}
+        .st-key-quick_pick_strip .stButton > button {{
+            background-color: var(--bg-surface) !important;
+            color: var(--text-muted) !important;
+            border: 1px solid var(--border-hairline) !important;
+            border-radius: 5px !important;
+            font-family: {FONT_MONO} !important;
+            font-size: 0.76rem !important;
+            font-weight: 500 !important;
+            text-transform: uppercase !important;
+            letter-spacing: 0.03em !important;
+            min-height: 38px !important;
+            padding: 0.25rem 0.72rem !important;
+            white-space: nowrap !important;
+        }}
+        .st-key-quick_pick_strip .stButton > button:hover {{
+            background-color: var(--bg-hover) !important;
+            color: var(--text-primary) !important;
+            border-color: #364050 !important;
+        }}
+        .st-key-quick_pick_strip .stButton > button[kind="primary"],
+        .st-key-quick_pick_strip button[data-testid="stBaseButton-primary"] {{
+            background-color: var(--bg-hover) !important;
+            color: var(--text-primary) !important;
+            border: 1px solid var(--text-primary) !important;
+            font-weight: 600 !important;
+        }}
+        .st-key-quick_pick_strip .stButton > button[kind="primary"] *,
+        .st-key-quick_pick_strip button[data-testid="stBaseButton-primary"] * {{
+            color: var(--text-primary) !important;
+        }}
+
+        .hero-freshness {{
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.55rem;
+            padding: 0.45rem 0 0.2rem 0;
+            font-family: {FONT_MONO};
+            font-variant-numeric: tabular-nums;
+            font-size: 0.74rem;
+            color: var(--text-muted);
+        }}
+        .notice-strip {{
+            padding: 0.52rem 0.85rem;
+            border-radius: 0 4px 4px 0;
+            font-size: 0.82rem;
+            margin: 0.45rem 0;
+        }}
+        .notice-loading {{
+            background: var(--bg-surface);
+            border-left: 3px solid var(--text-muted);
+            border-top: 1px solid var(--border-hairline);
+            border-right: 1px solid var(--border-hairline);
+            border-bottom: 1px solid var(--border-hairline);
+            color: var(--text-muted);
+            font-family: {FONT_MONO};
+        }}
+        .notice-error {{
+            background: rgba(239, 68, 68, 0.06);
+            border-left: 3px solid var(--crimson);
+            border-top: 1px solid rgba(239, 68, 68, 0.18);
+            border-right: 1px solid rgba(239, 68, 68, 0.18);
+            border-bottom: 1px solid rgba(239, 68, 68, 0.18);
+            color: var(--text-primary);
+        }}
+
         /* Smooth vertical page scroll over touch Plotly charts */
         .js-plotly-plot,
         .js-plotly-plot .plotly,
@@ -941,6 +1060,7 @@ def inject_theme_css() -> None:
             /* Touch targets >= 42px */
             .stButton > button,
             .stFormSubmitButton > button,
+            .st-key-quick_pick_strip .stButton > button,
             [data-testid="stSelectbox"] > div,
             [data-testid="stSelectbox"] > div > div,
             [data-testid="stSelectbox"] div[data-baseweb="select"] > div,
@@ -1022,10 +1142,25 @@ def inject_theme_css() -> None:
     st.markdown(css, unsafe_allow_html=True)
 
 
+def render_loading_notice_html(ticker: str) -> str:
+    return _html(
+        f'<div class="notice-strip notice-loading">LOADING MARKET &amp; FINANCIAL DATA: {_esc(ticker)} ...</div>'
+    )
+
+
+def render_error_notice_html(message_th: str) -> str:
+    return _html(
+        f'<div class="notice-strip notice-error"><strong>ไม่สามารถโหลดข้อมูลได้:</strong> {_esc(message_th)}</div>'
+    )
+
+
 def render_hero_bar(
-    analysis: dict[str, Any], fisher_total: int, fisher_assessed: int
+    analysis: dict[str, Any],
+    fisher_total: int,
+    fisher_assessed: int,
+    target_buy_price: float | None = None,
 ) -> None:
-    """Render compact decisive Hero Bar with hairline vertical dividers."""
+    """Render compact decisive Hero Bar with currency detection, target gap, and freshness."""
     ticker = analysis["ticker"]
     profile = analysis["profile"]
     market = analysis["market"]
@@ -1033,6 +1168,7 @@ def render_hero_bar(
     ov = analysis["sector_overlay"]
     val = analysis["valuation_summary"]
     summary = analysis["scoring_summary"]
+    cache_st = analysis.get("cache_status", {})
 
     price = market.get("current_price")
     chg = market.get("change_pct")
@@ -1040,8 +1176,10 @@ def render_hero_bar(
     pe = val.get("pe_ttm")
     div_y = val.get("dividend_yield") or 0.0
     currency = market.get("currency", "USD")
+    fin_currency = market.get("financial_currency", currency)
+    currency_mismatch = bool(market.get("currency_mismatch"))
 
-    price_str = f"{price:,.2f}" if price is not None else "N/A"
+    price_str = format_price(price, currency)
     if chg is not None:
         chg_color = PALETTE["emerald"] if chg >= 0 else PALETTE["crimson"]
         chg_str = f"{chg * 100:+.2f}%"
@@ -1049,9 +1187,25 @@ def render_hero_bar(
         chg_color = PALETTE["text_muted"]
         chg_str = "0.00%"
 
-    mcap_str = f"${mcap / 1e9:,.1f}B" if mcap else "N/A"
+    mcap_str = format_compact_money(mcap, currency)
     pe_str = f"{pe:.1f}x" if pe is not None else "N/A"
     div_str = f"{div_y * 100:.2f}%"
+
+    target_badge = ""
+    if target_buy_price is not None and target_buy_price > 0 and price is not None and price > 0:
+        target_fmt = format_price(target_buy_price, currency)
+        if price <= target_buy_price:
+            target_badge = (
+                f'<span class="pill-subtle" style="color:{PALETTE["emerald"]};border-color:{PALETTE["emerald"]};">'
+                f"อยู่ในโซนซื้อ (เป้า {target_fmt})</span>"
+            )
+        else:
+            gap_pct = ((target_buy_price - price) / price) * 100.0
+            gap_col = PALETTE["amber"] if abs(gap_pct) <= 10.0 else PALETTE["text_muted"]
+            target_badge = (
+                f'<span class="pill-subtle" style="color:{gap_col};">'
+                f"{gap_pct:.1f}% ถึงจุดซื้อ (เป้า {target_fmt})</span>"
+            )
 
     overlay_badge = ""
     if ov["overlay"] != "standard":
@@ -1076,6 +1230,17 @@ def render_hero_bar(
         else PALETTE["text_primary"]
     )
 
+    latest_stmt_label = (
+        cache_st.get("latest_statement_label")
+        or profile.get("latest_statement_label")
+        or "N/A"
+    )
+    mismatch_html = ""
+    if currency_mismatch:
+        mismatch_html = (
+            f'<span class="pill-subtle">งบสกุล {_esc(fin_currency)} / ซื้อขาย {_esc(currency)}</span>'
+        )
+
     html = _html(
         f"""
         <div class="hero-bar">
@@ -1099,6 +1264,7 @@ def render_hero_bar(
                 <div class="hero-price-row">
                     <span class="hero-price">{price_str} <span style="font-size:0.78rem;color:{PALETTE['text_muted']};font-weight:400;">{_esc(currency)}</span></span>
                     <span class="hero-change" style="color:{chg_color};">{chg_str} (1D)</span>
+                    {target_badge}
                 </div>
             </div>
             <div class="hero-right">
@@ -1126,6 +1292,10 @@ def render_hero_bar(
                     <span class="hero-kpi-sub">{_esc(ov['overlay'].upper())}</span>
                 </div>
             </div>
+        </div>
+        <div class="hero-freshness">
+            <span>งบล่าสุด: {_esc(latest_stmt_label)}</span>
+            {mismatch_html}
         </div>
         """
     )
@@ -1245,7 +1415,7 @@ def render_metric_row_html(metric: dict[str, Any]) -> str:
 
 
 def render_growth_strip_html(
-    growth: dict[str, Any], valuation: dict[str, Any]
+    growth: dict[str, Any], valuation: dict[str, Any], currency: str = "USD"
 ) -> str:
     """Compact hairline horizontal strip for growth decomposition & Lynch Fair Value."""
     hist_g = growth.get("hist_growth")
@@ -1264,7 +1434,7 @@ def render_growth_strip_html(
         ("Forward Est", f"{fwd_g * 100:.1f}%" if fwd_g is not None else "N/A", PALETTE["text_primary"]),
         ("Blended g", f"{blend_g * 100:.1f}%" if blend_g is not None else "N/A", PALETTE["text_primary"]),
         ("FV Mult (Cap 25x)", f"{fv_mult:.1f}x" if fv_mult is not None else "N/A", PALETTE["text_primary"]),
-        ("Lynch Fair Value", f"${fv:,.2f}" if fv is not None else "N/A", PALETTE["text_primary"]),
+        ("Lynch Fair Value", format_price(fv, currency), PALETTE["text_primary"]),
         ("Upside / Downside", f"{upside * 100:+.1f}%" if upside is not None else "N/A", up_color),
     ]
     cells_html = "".join(
@@ -1275,7 +1445,47 @@ def render_growth_strip_html(
     return _html(f'<div class="data-strip data-strip-3col">{cells_html}</div>')
 
 
-def render_revenue_strip_html(annual_statements: list[dict[str, Any]]) -> str:
+def render_balance_strip_html(
+    annual_statements: list[dict[str, Any]], financial_currency: str = "USD"
+) -> str:
+    """Compact Cash, Total Debt, Net Debt, and FCF strip with dynamic currency."""
+    if not annual_statements:
+        return ""
+    latest = annual_statements[-1]
+    cash = latest.get("cash_and_equivalents")
+    debt = latest.get("total_debt")
+    fcf = latest.get("free_cash_flow")
+    net_debt = (debt - cash) if (debt is not None and cash is not None) else None
+
+    nd_col = (
+        PALETTE["emerald"]
+        if net_debt is not None and net_debt <= 0
+        else PALETTE["text_primary"]
+    )
+    fcf_col = (
+        PALETTE["emerald"]
+        if fcf is not None and fcf > 0
+        else PALETTE["crimson"]
+        if fcf is not None and fcf < 0
+        else PALETTE["text_primary"]
+    )
+    cells = [
+        ("Cash & Equiv", format_compact_money(cash, financial_currency), PALETTE["text_primary"]),
+        ("Total Debt", format_compact_money(debt, financial_currency), PALETTE["text_primary"]),
+        ("Net Debt", format_compact_money(net_debt, financial_currency), nd_col),
+        ("Latest FCF", format_compact_money(fcf, financial_currency), fcf_col),
+    ]
+    cells_html = "".join(
+        f'<div class="data-strip-cell"><span class="data-strip-label">{label}</span>'
+        f'<span class="data-strip-val" style="color:{col};">{val}</span></div>'
+        for label, val, col in cells
+    )
+    return _html(f'<div class="data-strip">{cells_html}</div>')
+
+
+def render_revenue_strip_html(
+    annual_statements: list[dict[str, Any]], financial_currency: str = "USD"
+) -> str:
     """Compact 5Y annual revenue & YoY growth hairline strip."""
     if not annual_statements:
         return ""
@@ -1285,7 +1495,7 @@ def render_revenue_strip_html(annual_statements: list[dict[str, Any]]) -> str:
         yr = str(rec.get("date", ""))[:4]
         rev = rec.get("revenue")
         if rev is not None:
-            rev_b = f"${rev / 1e9:,.1f}B"
+            rev_b = format_compact_money(rev, financial_currency)
             yoy_str = ""
             yoy_col = PALETTE["text_muted"]
             if prev_rev is not None and prev_rev > 0:
@@ -1307,12 +1517,25 @@ def render_revenue_strip_html(annual_statements: list[dict[str, Any]]) -> str:
 def render_peer_table_html(
     peer_rows: list[dict[str, Any]], active_ticker: str
 ) -> str:
-    """Render minimalist Swiss-editorial peer comparison table with tabular monospace nums."""
+    """Render minimalist Swiss-editorial peer comparison table with per-row currency."""
     rows_html: list[str] = []
     for r in peer_rows:
         t = r["ticker"]
+        cur = r.get("currency", "USD")
         cls_name = ' class="active-row"' if t == active_ticker else ""
-        price_s = f"{r['price']:,.2f}" if r.get("price") is not None else "N/A"
+        price_s = format_price(r.get("price"), cur)
+        tbp = r.get("target_buy_price")
+        if tbp is not None and r.get("price"):
+            tbp_s = format_price(tbp, cur)
+            if r["price"] <= tbp:
+                gap_s = f'<span style="color:{PALETTE["emerald"]};">IN ZONE</span>'
+            else:
+                gap_pct = ((tbp - r["price"]) / r["price"]) * 100.0
+                gap_s = f'<span style="color:{PALETTE["text_muted"]};">{gap_pct:.1f}%</span>'
+            target_cell = f"{tbp_s} {gap_s}"
+        else:
+            target_cell = '<span style="color:#8B949E;">-</span>'
+
         pe_s = f"{r['pe']:.1f}x" if r.get("pe") is not None else "N/A"
         peg_s = f"{r['peg']:.2f}x" if r.get("peg") is not None else "N/A"
         g_s = f"{r['g'] * 100:.1f}%" if r.get("g") is not None else "N/A"
@@ -1328,9 +1551,10 @@ def render_peer_table_html(
             _html(
                 f"""
                 <tr{cls_name}>
-                    <td><span class="mono" style="font-weight:600;">{_esc(t)}</span> <span style="color:{PALETTE['text_muted']};font-size:0.76rem;margin-left:0.35rem;">{_esc(r.get('company_name', '')[:24])}</span></td>
+                    <td><span class="mono" style="font-weight:600;">{_esc(t)}</span> <span style="color:{PALETTE['text_muted']};font-size:0.76rem;margin-left:0.35rem;">{_esc(r.get('company_name', '')[:22])}</span></td>
                     <td><span class="pill-subtle">{_esc(r['category'])}</span></td>
                     <td class="num">{price_s}</td>
+                    <td class="num">{target_cell}</td>
                     <td class="num">{pe_s}</td>
                     <td class="num">{peg_s}</td>
                     <td class="num">{g_s}</td>
@@ -1352,6 +1576,7 @@ def render_peer_table_html(
                         <th>Ticker / Company</th>
                         <th>Lynch Category</th>
                         <th class="num">Price</th>
+                        <th class="num">Target Buy</th>
                         <th class="num">P/E</th>
                         <th class="num">PEG</th>
                         <th class="num">Blended g</th>
@@ -1449,9 +1674,11 @@ def _base_plotly_layout(height: int = 240) -> dict[str, Any]:
 
 
 def build_lynch_fair_value_chart(analysis: dict[str, Any]) -> go.Figure:
-    """5Y Price vs Peter Lynch Fair Value Line with non-clipping header annotations."""
+    """5Y Price vs Peter Lynch Fair Value Line with dynamic currency symbols."""
     fig = go.Figure()
     layout = _base_plotly_layout(height=265)
+    currency_code = analysis["market"].get("currency", "USD")
+    cur_sym = get_currency_symbol(currency_code)
 
     series = analysis["valuation_summary"].get("lynch_fair_value_series", [])
     price_hist = analysis.get("valuation_summary", {})
@@ -1482,7 +1709,7 @@ def build_lynch_fair_value_chart(analysis: dict[str, Any]) -> go.Figure:
             mode="lines",
             name="Price",
             line=dict(color=PALETTE["text_primary"], width=1.75),
-            hovertemplate="Price: $%{y:,.2f}<extra></extra>",
+            hovertemplate=f"Price: {cur_sym}%{{y:,.2f}}<extra></extra>",
         )
     )
 
@@ -1496,7 +1723,7 @@ def build_lynch_fair_value_chart(analysis: dict[str, Any]) -> go.Figure:
         y=1.02,
         xanchor="left",
         yanchor="bottom",
-        text=f"Price ${last_price:,.2f}",
+        text=f"Price {cur_sym}{last_price:,.2f}",
         showarrow=False,
         font=dict(family=FONT_MONO, size=11, color=PALETTE["text_primary"]),
     )
@@ -1517,7 +1744,7 @@ def build_lynch_fair_value_chart(analysis: dict[str, Any]) -> go.Figure:
                 mode="lines",
                 name="Lynch FV",
                 line=dict(color=fv_color, width=1.75, dash="dash"),
-                hovertemplate="Lynch FV: $%{y:,.2f}<extra></extra>",
+                hovertemplate=f"Lynch FV: {cur_sym}%{{y:,.2f}}<extra></extra>",
             )
         )
 
@@ -1529,7 +1756,7 @@ def build_lynch_fair_value_chart(analysis: dict[str, Any]) -> go.Figure:
             y=1.02,
             xanchor="right",
             yanchor="bottom",
-            text=f"Lynch FV ${last_fv_val:,.2f}",
+            text=f"Lynch FV {cur_sym}{last_fv_val:,.2f}",
             showarrow=False,
             font=dict(family=FONT_MONO, size=11, color=fv_color),
         )
@@ -1546,7 +1773,7 @@ def build_lynch_fair_value_chart(analysis: dict[str, Any]) -> go.Figure:
             font=dict(family=FONT_MONO, size=10, color=PALETTE["amber"]),
         )
 
-    layout["yaxis"]["tickprefix"] = "$"
+    layout["yaxis"]["tickprefix"] = cur_sym
     fig.update_layout(**layout)
     return fig
 

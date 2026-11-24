@@ -1,9 +1,9 @@
-"""Main Streamlit application for Lynch & Fisher Institutional Equity Research."""
+"""Main Streamlit application for Lynch & Fisher Equity Research Terminal."""
 
 from __future__ import annotations
 
+from datetime import datetime
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +19,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.scoring_config import CATEGORY_PRIORITY
-from core.data_fetcher import DataFetchError, StockDataFetcher
+from core.data_fetcher import (
+    DataFetchError,
+    fetch_combined_stock_data,
+    fetch_financial_statements,
+    fetch_peer_stock_data,
+    fetch_quote_snapshot,
+    get_currency_symbol,
+)
 from core.scoring_engine import analyze_stock
 from storage.user_db import FISHER_15_POINTS, FISHER_SECTIONS, UserWorkspaceDB
 from theme import (
@@ -30,8 +37,11 @@ from theme import (
     build_margin_trend_chart,
     format_threshold_value,
     inject_theme_css,
+    render_balance_strip_html,
+    render_error_notice_html,
     render_growth_strip_html,
     render_hero_bar,
+    render_loading_notice_html,
     render_metric_row_html,
     render_peer_table_html,
     render_red_flag_bar,
@@ -40,8 +50,27 @@ from theme import (
     render_section_header,
 )
 
+MONOCHROME_FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
+    'fill="none" stroke="#F1F5F9" stroke-width="2">'
+    '<rect x="3" y="3" width="18" height="18" rx="3"/>'
+    '<path d="M8 15V9l4 6V9m4 0v6"/>'
+    "</svg>"
+)
+
+CURATED_QUICK_PICKS: list[str] = [
+    "NVDA",
+    "MSFT",
+    "KO",
+    "JPM",
+    "CPALL.BK",
+    "ADVANC.BK",
+    "BDMS.BK",
+]
+
 st.set_page_config(
-    page_title="Lynch / Fisher Equity Research",
+    page_title="Lynch & Fisher Terminal",
+    page_icon=MONOCHROME_FAVICON_SVG,
     layout="wide",
     initial_sidebar_state="auto",
 )
@@ -50,35 +79,8 @@ inject_theme_css()
 
 
 @st.cache_resource
-def _get_fetcher() -> StockDataFetcher:
-    return StockDataFetcher()
-
-
-@st.cache_resource
 def _get_user_db() -> UserWorkspaceDB:
     return UserWorkspaceDB()
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def _load_stock_data_cached(
-    ticker: str, refresh_nonce: int = 0, allow_network: bool = True
-) -> dict[str, Any]:
-    fetcher = _get_fetcher()
-    return fetcher.get_stock_data(
-        ticker, force_refresh=(refresh_nonce > 0), allow_network=allow_network
-    )
-
-
-def _analyze_with_db(
-    ticker: str, refresh_nonce: int = 0, allow_network: bool = True
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    db = _get_user_db()
-    stock_data = _load_stock_data_cached(
-        ticker, refresh_nonce=refresh_nonce, allow_network=allow_network
-    )
-    override = db.get_category_override(ticker)
-    analysis = analyze_stock(stock_data, category_override=override)
-    return stock_data, analysis
 
 
 def _render_metric_block(metrics: list[dict[str, Any]], key_prefix: str) -> None:
@@ -136,6 +138,23 @@ def _save_fisher_callback(ticker: str) -> None:
         db.save_fisher_scores(ticker, updated)
 
 
+def _trigger_refresh(ticker: str) -> None:
+    nonces = st.session_state["refresh_nonces"]
+    nonces[ticker] = nonces.get(ticker, 0) + 1
+    fetch_quote_snapshot.clear()
+    fetch_financial_statements.clear()
+    fetch_peer_stock_data.clear()
+
+
+def _build_quick_pick_list(watchlist_tickers: list[str]) -> list[str]:
+    ordered: list[str] = []
+    for sym in watchlist_tickers + CURATED_QUICK_PICKS:
+        clean = sym.strip().upper()
+        if clean and clean not in ordered:
+            ordered.append(clean)
+    return ordered
+
+
 def main() -> None:
     db = _get_user_db()
     watchlist = db.get_watchlist()
@@ -149,6 +168,10 @@ def main() -> None:
         st.session_state["refresh_nonces"] = {}
     if "extra_peers" not in st.session_state:
         st.session_state["extra_peers"] = []
+    if "peers_loaded" not in st.session_state:
+        st.session_state["peers_loaded"] = False
+    if "peer_cache_bust" not in st.session_state:
+        st.session_state["peer_cache_bust"] = 0
 
     # ------------------------------------------------------------------
     # Minimalist Left Sidebar
@@ -168,7 +191,7 @@ def main() -> None:
             search_val = st.text_input(
                 "ค้นหาหุ้น (Ticker Symbol)",
                 value=st.session_state["active_ticker"],
-                placeholder="e.g. NVDA, KO, XOM, JPM",
+                placeholder="e.g. NVDA, CPALL.BK, JPM",
             )
             c_btn1, c_btn2 = st.columns(2, gap="small")
             with c_btn1:
@@ -184,9 +207,7 @@ def main() -> None:
             t_target = (search_val or st.session_state["active_ticker"]).strip().upper()
             if t_target:
                 st.session_state["active_ticker"] = t_target
-                nonces = st.session_state["refresh_nonces"]
-                nonces[t_target] = nonces.get(t_target, 0) + 1
-                _load_stock_data_cached.clear()
+                _trigger_refresh(t_target)
                 st.rerun()
 
         active_ticker = st.session_state["active_ticker"]
@@ -211,25 +232,78 @@ def main() -> None:
         for item in watchlist:
             t_sym = item["ticker"]
             btn_type = "primary" if t_sym == active_ticker else "secondary"
-            label = f"{t_sym}  -  {(item['company_name'] or '')[:18]}"
+            tbp = item.get("target_buy_price")
+            suffix = f" [{tbp:,.1f}]" if tbp else ""
+            label = f"{t_sym}{suffix}  -  {(item['company_name'] or '')[:16]}"
             if st.button(label, key=f"wl_{t_sym}", type=btn_type, width="stretch"):
                 st.session_state["active_ticker"] = t_sym
                 st.rerun()
 
     # ------------------------------------------------------------------
-    # Load & Analyze Active Ticker
+    # Top Main-Canvas Search Strip & Single-Row Quick-Pick Chips (Mobile-First)
+    # ------------------------------------------------------------------
+    active_ticker = st.session_state["active_ticker"]
+    with st.form("top_ticker_bar", clear_on_submit=False):
+        s_col1, s_col2, s_col3 = st.columns([0.62, 0.19, 0.19], gap="small")
+        with s_col1:
+            top_search = st.text_input(
+                "ค้นหาหุ้น (US / Thai .BK)",
+                value=active_ticker,
+                placeholder="Ticker: NVDA, CPALL.BK, ADVANC.BK, JPM",
+                label_visibility="collapsed",
+            )
+        with s_col2:
+            top_go = st.form_submit_button("Analyze", type="primary", width="stretch")
+        with s_col3:
+            top_ref = st.form_submit_button("Refresh", width="stretch")
+
+    if top_go and top_search.strip():
+        st.session_state["active_ticker"] = top_search.strip().upper()
+        st.rerun()
+
+    if top_ref:
+        t_target = (top_search or active_ticker).strip().upper()
+        if t_target:
+            st.session_state["active_ticker"] = t_target
+            _trigger_refresh(t_target)
+            st.rerun()
+
+    quick_picks = _build_quick_pick_list(watchlist_tickers)
+    with st.container(key="quick_pick_strip", horizontal=True, wrap=False, gap="small"):
+        for qp_sym in quick_picks:
+            chip_type = "primary" if qp_sym == active_ticker else "secondary"
+            if st.button(qp_sym, key=f"qp_{qp_sym}", type=chip_type):
+                st.session_state["active_ticker"] = qp_sym
+                st.rerun()
+
+    # ------------------------------------------------------------------
+    # Load & Analyze Active Ticker (Cloud-Safe Split Caching + Clean Error UI)
     # ------------------------------------------------------------------
     active_ticker = st.session_state["active_ticker"]
     nonce = st.session_state["refresh_nonces"].get(active_ticker, 0)
+    loading_slot = st.empty()
+    loading_slot.markdown(render_loading_notice_html(active_ticker), unsafe_allow_html=True)
 
     try:
-        stock_data, analysis = _analyze_with_db(active_ticker, refresh_nonce=nonce)
+        stock_data = fetch_combined_stock_data(active_ticker, cache_bust=nonce)
+        override = db.get_category_override(active_ticker)
+        analysis = analyze_stock(stock_data, category_override=override)
     except DataFetchError as exc:
-        st.error(f"ไม่สามารถดึงข้อมูลหุ้น '{active_ticker}' ได้: {exc}")
+        loading_slot.empty()
+        st.markdown(render_error_notice_html(str(exc)), unsafe_allow_html=True)
         st.stop()
-    except Exception as exc:
-        st.error(f"เกิดข้อผิดพลาดระหว่างวิเคราะห์ '{active_ticker}': {exc}")
+    except Exception:
+        loading_slot.empty()
+        st.markdown(
+            render_error_notice_html(
+                f"ระบบไม่สามารถดึงหรือประมวลผลข้อมูลของ '{active_ticker}' ได้ในขณะนี้ "
+                "(อาจเกิดจาก Yahoo Finance จำกัดคำขอชั่วคราว หรือชื่อย่อหุ้นไม่ถูกต้อง)"
+            ),
+            unsafe_allow_html=True,
+        )
         st.stop()
+
+    loading_slot.empty()
 
     # Keep watchlist metadata fresh if ticker is saved.
     if db.is_in_watchlist(active_ticker):
@@ -241,6 +315,11 @@ def main() -> None:
 
     fisher_summary = db.get_fisher_summary(active_ticker)
     fisher_scores = db.get_fisher_scores(active_ticker)
+    target_buy_price = db.get_target_buy_price(active_ticker)
+
+    trading_ccy = analysis["market"].get("currency", "USD")
+    fin_ccy = analysis["market"].get("financial_currency", trading_ccy)
+    cur_sym = get_currency_symbol(trading_ccy)
 
     # Sidebar cache & provenance footer
     with st.sidebar:
@@ -259,12 +338,13 @@ def main() -> None:
         )
 
     # ------------------------------------------------------------------
-    # 1. Hero Bar + Manual Category Override + Slim Red Flag Alert Bar
+    # 1. Hero Bar + Freshness + Category Override & Target Buy Price
     # ------------------------------------------------------------------
     render_hero_bar(
         analysis,
         fisher_total=fisher_summary["total_score"],
         fisher_assessed=fisher_summary["assessed_count"],
+        target_buy_price=target_buy_price,
     )
 
     if analysis.get("cache_status", {}).get("data_source") in {"stale_cache", "seed_snapshot"}:
@@ -281,7 +361,7 @@ def main() -> None:
         )
 
     cls = analysis["classification"]
-    ov_col1, ov_col2, ov_col3 = st.columns([0.46, 0.24, 0.30], gap="medium")
+    ov_col1, ov_col2, ov_col3, ov_col4 = st.columns([0.38, 0.22, 0.30, 0.10], gap="small")
     with ov_col1:
         st.markdown(
             f"<div style='font-size:0.76rem;color:{PALETTE['text_muted']};padding-top:0.35rem;'>"
@@ -311,6 +391,45 @@ def main() -> None:
             )
             st.rerun()
     with ov_col3:
+        with st.form(f"target_buy_form_{active_ticker}", clear_on_submit=False):
+            tb_in, tb_btn = st.columns([0.62, 0.38], gap="small")
+            with tb_in:
+                tbp_input = st.text_input(
+                    f"Target Buy ({cur_sym})",
+                    value=f"{target_buy_price:.2f}" if target_buy_price else "",
+                    placeholder=f"Target Buy ({cur_sym})",
+                    label_visibility="collapsed",
+                )
+            with tb_btn:
+                save_tbp = st.form_submit_button("Set Target", width="stretch")
+        if save_tbp:
+            raw_txt = tbp_input.strip().replace(",", "")
+            if not raw_txt or raw_txt == "0":
+                db.set_target_buy_price(
+                    active_ticker,
+                    None,
+                    analysis["profile"].get("company_name", ""),
+                    analysis["profile"].get("sector", ""),
+                )
+                st.rerun()
+            else:
+                try:
+                    parsed_tbp = float(raw_txt)
+                    if parsed_tbp <= 0:
+                        raise ValueError
+                    db.set_target_buy_price(
+                        active_ticker,
+                        parsed_tbp,
+                        analysis["profile"].get("company_name", ""),
+                        analysis["profile"].get("sector", ""),
+                    )
+                    st.rerun()
+                except ValueError:
+                    st.markdown(
+                        render_error_notice_html("กรุณากรอกราคาเป้าหมาย (Target Buy Price) เป็นตัวเลขมากกว่า 0"),
+                        unsafe_allow_html=True,
+                    )
+    with ov_col4:
         with st.popover("?", width="content"):
             st.markdown(f"**{cls['label_th']}**")
             st.caption(cls["description_th"])
@@ -344,7 +463,9 @@ def main() -> None:
         with g_col1:
             st.markdown(
                 render_growth_strip_html(
-                    analysis["growth_summary"], analysis["valuation_summary"]
+                    analysis["growth_summary"],
+                    analysis["valuation_summary"],
+                    currency=trading_ccy,
                 ),
                 unsafe_allow_html=True,
             )
@@ -376,9 +497,14 @@ def main() -> None:
             score=saf_pillar["score"],
             weight_pct=saf_pillar["effective_category_weight"],
         )
+        bal_strip = render_balance_strip_html(
+            stock_data.get("annual_statements", []), financial_currency=fin_ccy
+        )
+        if bal_strip:
+            st.markdown(bal_strip, unsafe_allow_html=True)
+
         _render_metric_block(saf_pillar["metrics"], f"saf_{active_ticker}")
 
-        # Full Red Flag Audit Micro-Drawer
         rf_checks = analysis["red_flags"]["all_checks"]
         with st.expander("รายละเอียดการตรวจสอบ Red Flags ทั้งหมด (4 รายการ)", expanded=False):
             for chk in rf_checks:
@@ -435,11 +561,12 @@ def main() -> None:
             config=PLOTLY_CONFIG,
         )
 
-    rev_strip = render_revenue_strip_html(stock_data.get("annual_statements", []))
+    rev_strip = render_revenue_strip_html(
+        stock_data.get("annual_statements", []), financial_currency=fin_ccy
+    )
     if rev_strip:
         st.markdown(rev_strip, unsafe_allow_html=True)
 
-    # Split Fisher Quality metrics across two balanced columns cleanly.
     q_metrics = qual_pillar["metrics"]
     q_active = [m for m in q_metrics if m["status"] != "skipped_inapplicable"]
     q_skipped = [m for m in q_metrics if m["status"] == "skipped_inapplicable"]
@@ -453,21 +580,25 @@ def main() -> None:
         _render_metric_block(q_skipped, f"qual_skip_{active_ticker}")
 
     # ------------------------------------------------------------------
-    # 4. Peer Comparison Table
+    # 4. Lazy-Loaded Peer Comparison Table
     # ------------------------------------------------------------------
     render_section_header(
         "Peer & Watchlist Comparison",
-        "ตารางเปรียบเทียบเชิงปริมาณและคุณภาพเทียบกลุ่ม",
+        "ตารางเปรียบเทียบเชิงปริมาณและคุณภาพเทียบกลุ่ม (โหลดเมื่อกดเพื่อความรวดเร็วบน Cloud)",
     )
 
-    peer_add_c1, peer_add_c2 = st.columns([0.52, 0.48], gap="medium")
-    with peer_add_c1:
+    peer_ctl1, peer_ctl2, peer_ctl3 = st.columns([0.34, 0.42, 0.24], gap="small")
+    with peer_ctl1:
+        if st.button("โหลดข้อมูลเทียบคู่แข่ง (Load Peers)", type="primary" if not st.session_state["peers_loaded"] else "secondary", key="load_peers_btn", width="stretch"):
+            st.session_state["peers_loaded"] = True
+            st.rerun()
+    with peer_ctl2:
         with st.form("add_peer_form", clear_on_submit=True):
             p_in_col, p_btn_col = st.columns([0.66, 0.34], gap="small")
             with p_in_col:
                 peer_sym = st.text_input(
                     "เพิ่มหุ้นเปรียบเทียบ",
-                    placeholder="Add ticker (e.g. AAPL)",
+                    placeholder="Add ticker (e.g. AAPL, SCB.BK)",
                     label_visibility="collapsed",
                 )
             with p_btn_col:
@@ -476,67 +607,72 @@ def main() -> None:
             sym_clean = peer_sym.strip().upper()
             if sym_clean not in st.session_state["extra_peers"]:
                 st.session_state["extra_peers"].append(sym_clean)
+            st.session_state["peers_loaded"] = True
+            st.rerun()
+    with peer_ctl3:
+        if st.session_state["peers_loaded"]:
+            if st.button("Refresh Peers", key="refresh_peers_btn", width="stretch"):
+                fetch_peer_stock_data.clear()
+                st.session_state["peer_cache_bust"] += 1
+                st.rerun()
+
+    if st.session_state["peers_loaded"]:
+        compare_tickers: list[str] = []
+        for t in [active_ticker] + watchlist_tickers + st.session_state["extra_peers"]:
+            if t not in compare_tickers:
+                compare_tickers.append(t)
+
+        peer_rows: list[dict[str, Any]] = []
+        peer_bust = st.session_state["peer_cache_bust"]
+        for pt in compare_tickers[:10]:
             try:
-                _load_stock_data_cached(sym_clean, refresh_nonce=0, allow_network=True)
+                if pt == active_ticker:
+                    p_res = analysis
+                else:
+                    p_data = fetch_peer_stock_data(pt, cache_bust=peer_bust)
+                    p_ov = db.get_category_override(pt)
+                    p_res = analyze_stock(p_data, category_override=p_ov)
+                p_fs = db.get_fisher_summary(pt)
+                is_fin = p_res["sector_overlay"]["overlay"] == "financials"
+                cap_eff = (
+                    p_res["quality_summary"].get("roe_5y_avg")
+                    if is_fin
+                    else p_res["quality_summary"].get("roic_5y_avg")
+                )
+                peer_rows.append(
+                    {
+                        "ticker": pt,
+                        "company_name": p_res["profile"].get("company_name", pt),
+                        "category": p_res["classification"]["active_category"],
+                        "currency": p_res["market"].get("currency", "USD"),
+                        "price": p_res["market"].get("current_price"),
+                        "target_buy_price": db.get_target_buy_price(pt),
+                        "pe": p_res["valuation_summary"].get("pe_ttm"),
+                        "peg": p_res["valuation_summary"].get("peg_ratio"),
+                        "g": p_res["growth_summary"].get("blended_growth"),
+                        "cap_eff": cap_eff,
+                        "cap_eff_label": "ROE" if is_fin else "ROIC",
+                        "quant_score": p_res["scoring_summary"]["final_score"],
+                        "signal": p_res["scoring_summary"]["signal"],
+                        "fisher_score": p_fs["total_score"],
+                        "coverage": p_res["scoring_summary"]["data_coverage_pct"],
+                    }
+                )
             except Exception:
-                pass
-            st.rerun()
-    with peer_add_c2:
-        if st.button("Refresh Peers", key="refresh_peers_btn"):
-            fetcher = _get_fetcher()
-            for pt in [t for t in watchlist_tickers + st.session_state["extra_peers"] if t != active_ticker][:10]:
-                try:
-                    fetcher.get_stock_data(pt, force_refresh=True, allow_network=True)
-                    time.sleep(0.4)
-                except Exception:
-                    continue
-            _load_stock_data_cached.clear()
-            st.rerun()
+                continue
 
-    compare_tickers: list[str] = []
-    for t in [active_ticker] + watchlist_tickers + st.session_state["extra_peers"]:
-        if t not in compare_tickers:
-            compare_tickers.append(t)
-
-    peer_rows: list[dict[str, Any]] = []
-    for pt in compare_tickers[:10]:
-        try:
-            if pt == active_ticker:
-                p_res = analysis
-            else:
-                _, p_res = _analyze_with_db(pt, refresh_nonce=0, allow_network=False)
-            p_fs = db.get_fisher_summary(pt)
-            is_fin = p_res["sector_overlay"]["overlay"] == "financials"
-            cap_eff = (
-                p_res["quality_summary"].get("roe_5y_avg")
-                if is_fin
-                else p_res["quality_summary"].get("roic_5y_avg")
-            )
-            peer_rows.append(
-                {
-                    "ticker": pt,
-                    "company_name": p_res["profile"].get("company_name", pt),
-                    "category": p_res["classification"]["active_category"],
-                    "price": p_res["market"].get("current_price"),
-                    "pe": p_res["valuation_summary"].get("pe_ttm"),
-                    "peg": p_res["valuation_summary"].get("peg_ratio"),
-                    "g": p_res["growth_summary"].get("blended_growth"),
-                    "cap_eff": cap_eff,
-                    "cap_eff_label": "ROE" if is_fin else "ROIC",
-                    "quant_score": p_res["scoring_summary"]["final_score"],
-                    "signal": p_res["scoring_summary"]["signal"],
-                    "fisher_score": p_fs["total_score"],
-                    "coverage": p_res["scoring_summary"]["data_coverage_pct"],
-                }
-            )
-        except Exception:
-            continue
-
-    if peer_rows:
-        st.markdown(render_peer_table_html(peer_rows, active_ticker), unsafe_allow_html=True)
+        if peer_rows:
+            st.markdown(render_peer_table_html(peer_rows, active_ticker), unsafe_allow_html=True)
+    else:
+        st.markdown(
+            f"<div style='padding:0.55rem 0;font-size:0.78rem;color:{PALETTE['text_muted']};'>"
+            f"ยังไม่ได้โหลดข้อมูลคู่แข่ง เพื่อประหยัดโควตาและเร่งความเร็วการเปิดหน้าแรก กดปุ่ม 'โหลดข้อมูลเทียบคู่แข่ง (Load Peers)' ด้านบนเมื่อต้องการเปรียบเทียบ {len(watchlist_tickers)} หุ้นใน Watchlist"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
     # ------------------------------------------------------------------
-    # 5. Decision Workspace (Separate from Quantitative Score)
+    # 5. Decision Workspace & JSON Backup Persistence
     # ------------------------------------------------------------------
     ws_head_col, ws_pop_col = st.columns([0.94, 0.06], gap="small")
     with ws_head_col:
@@ -596,7 +732,7 @@ def main() -> None:
                             args=(active_ticker,),
                         )
                     st.markdown(
-                        f"<div style='border-bottom:1px solid #161B22;margin:0.2rem 0 0.45rem 0;'></div>",
+                        "<div style='border-bottom:1px solid #161B22;margin:0.2rem 0 0.45rem 0;'></div>",
                         unsafe_allow_html=True,
                     )
 
@@ -630,7 +766,7 @@ def main() -> None:
 
         if save_notes_btn:
             db.save_thesis_notes(active_ticker, drill_txt, cat_txt, risk_txt)
-            st.toast(f"Saved thesis notes for {active_ticker}")
+            st.toast(f"บันทึกโน้ตการลงทุน {active_ticker} แล้ว")
 
         st.markdown(
             f"<div style='margin-top:1.05rem;padding-top:0.75rem;border-top:1px solid {PALETTE['hairline']};'>"
@@ -645,6 +781,71 @@ def main() -> None:
             ),
             unsafe_allow_html=True,
         )
+
+        # Backup & Restore JSON Persistence
+        st.markdown(
+            f"<div style='margin-top:1.15rem;padding-top:0.8rem;border-top:1px solid {PALETTE['hairline']};'>"
+            f"<div style='font-size:0.82rem;font-weight:600;color:{PALETTE['text_primary']};'>Watchlist &amp; Notes Backup (JSON)</div>"
+            f"<div style='font-size:0.73rem;color:{PALETTE['text_muted']};margin-top:2px;'>สำรองหรือกู้คืน Watchlist, Target Buy, Fisher Checklist และ 2-Minute Drill</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        if st.session_state.get("import_success_msg"):
+            st.markdown(
+                f"<div style='margin:0.45rem 0;padding:0.45rem 0.75rem;border-left:3px solid {PALETTE['emerald']};"
+                f"background:rgba(16,185,129,0.08);font-size:0.78rem;color:{PALETTE['text_primary']};'>"
+                f"{st.session_state.pop('import_success_msg')}</div>",
+                unsafe_allow_html=True,
+            )
+
+        bk_col1, bk_col2 = st.columns(2, gap="small")
+        with bk_col1:
+            backup_str = db.export_backup_json()
+            today_tag = datetime.now().strftime("%Y%m%d")
+            st.download_button(
+                "สำรองข้อมูล (Export JSON)",
+                data=backup_str,
+                file_name=f"lynch_fisher_backup_{today_tag}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+        with bk_col2:
+            uploaded_backup = st.file_uploader(
+                "กู้คืนข้อมูล (Import JSON)",
+                type=["json"],
+                key="backup_json_uploader",
+                label_visibility="collapsed",
+            )
+
+        if uploaded_backup is not None:
+            raw_bytes = uploaded_backup.getvalue()
+            sig = f"{uploaded_backup.name}:{len(raw_bytes)}:{hash(raw_bytes)}"
+            if st.session_state.get("last_imported_sig") != sig:
+                try:
+                    decoded = raw_bytes.decode("utf-8")
+                    counts = db.import_backup_json(decoded)
+                    st.session_state["last_imported_sig"] = sig
+                    # Sync Fisher session keys for active ticker after import.
+                    fresh_scores = db.get_fisher_scores(active_ticker)
+                    for item in FISHER_15_POINTS:
+                        st.session_state[f"fisher_{active_ticker}_{item['id']}"] = (
+                            fresh_scores.get(item["id"], 0)
+                        )
+                    st.session_state["import_success_msg"] = (
+                        f"นำเข้าข้อมูลเรียบร้อย: {counts['tickers_imported']} หุ้น "
+                        f"(Watchlist {counts['watchlist_count']}, Fisher {counts['checklists_count']}, Drill {counts['drills_count']})"
+                    )
+                    st.rerun()
+                except UnicodeDecodeError:
+                    st.markdown(
+                        render_error_notice_html("ไฟล์ต้องเข้ารหัสเป็น UTF-8 JSON"),
+                        unsafe_allow_html=True,
+                    )
+                except ValueError as exc:
+                    st.markdown(
+                        render_error_notice_html(str(exc)),
+                        unsafe_allow_html=True,
+                    )
 
 
 if __name__ == "__main__":

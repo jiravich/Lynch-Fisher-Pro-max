@@ -46,6 +46,79 @@ SEC_HEADERS = {
 }
 IMPERSONATE_PROFILES = ["chrome", "safari15_5", "edge"]
 
+CURRENCY_SYMBOLS: dict[str, str] = {
+    "USD": "$",
+    "THB": "฿",
+    "EUR": "€",
+    "GBP": "£",
+    "JPY": "¥",
+    "HKD": "HK$",
+    "SGD": "S$",
+    "CNY": "¥",
+}
+
+
+def get_currency_symbol(currency_code: str | None) -> str:
+    """Return compact currency symbol for USD, THB, EUR, GBP, JPY, HKD, SGD, CNY."""
+    code = str(currency_code or "USD").strip().upper()
+    if not code:
+        return "$"
+    return CURRENCY_SYMBOLS.get(code, f"{code} ")
+
+
+def _infer_currency_from_ticker(ticker: str) -> str:
+    upper = ticker.strip().upper()
+    if upper.endswith(".BK"):
+        return "THB"
+    if upper.endswith(".T"):
+        return "JPY"
+    if upper.endswith(".HK"):
+        return "HKD"
+    if upper.endswith(".SI"):
+        return "SGD"
+    if upper.endswith(".L"):
+        return "GBP"
+    return "USD"
+
+
+def _extract_latest_statement_meta(
+    annual_records: list[dict[str, Any]],
+    quarterly_records: list[dict[str, Any]],
+) -> tuple[str, str]:
+    """Return (latest_date_iso, human_readable_label) across quarterly/annual records."""
+    best_q = quarterly_records[-1].get("date", "") if quarterly_records else ""
+    best_a = annual_records[-1].get("date", "") if annual_records else ""
+
+    if best_q and (not best_a or best_q >= best_a):
+        try:
+            dt = datetime.strptime(best_q[:10], "%Y-%m-%d")
+            q_num = (dt.month - 1) // 3 + 1
+            return best_q[:10], f"Q{q_num} {dt.year} ({best_q[:10]})"
+        except Exception:
+            return best_q[:10], best_q[:10]
+
+    if best_a:
+        try:
+            dt = datetime.strptime(best_a[:10], "%Y-%m-%d")
+            return best_a[:10], f"FY {dt.year} ({best_a[:10]})"
+        except Exception:
+            return best_a[:10], best_a[:10]
+
+    return "", "N/A"
+
+
+def _st_cache_data(ttl: int) -> Callable[[Callable[..., _T]], Callable[..., _T]]:
+    """Apply @st.cache_data(ttl=ttl, show_spinner=False) when Streamlit is available."""
+    try:
+        import streamlit as st
+
+        return st.cache_data(ttl=ttl, show_spinner=False)
+    except Exception:
+        def _identity(fn: Callable[..., _T]) -> Callable[..., _T]:
+            return fn
+
+        return _identity
+
 # Canonical field -> ordered yfinance row label aliases.
 INCOME_FIELD_ALIASES: dict[str, list[str]] = {
     "revenue": ["Total Revenue", "Operating Revenue", "TotalRevenue"],
@@ -925,7 +998,9 @@ class StockDataFetcher:
                     "market_cap": None,
                     "fifty_two_week_high": _clean_float(meta.get("fiftyTwoWeekHigh")),
                     "fifty_two_week_low": _clean_float(meta.get("fiftyTwoWeekLow")),
-                    "currency": _clean_str(meta.get("currency"), "USD"),
+                    "currency": _clean_str(
+                        meta.get("currency"), _infer_currency_from_ticker(ticker)
+                    ).upper(),
                     "meta_name": _clean_str(meta.get("longName") or meta.get("shortName"), ""),
                     "price_history_5y": price_history,
                 }
@@ -942,7 +1017,7 @@ class StockDataFetcher:
         market_cap: float | None = None
         fifty_two_week_high: float | None = None
         fifty_two_week_low: float | None = None
-        currency = "USD"
+        currency = _infer_currency_from_ticker(ticker)
         meta_name = ""
 
         try:
@@ -986,7 +1061,7 @@ class StockDataFetcher:
             market_cap = _clean_float(fast.get("marketCap"))
             fifty_two_week_high = _clean_float(fast.get("yearHigh"))
             fifty_two_week_low = _clean_float(fast.get("yearLow"))
-            currency = _clean_str(fast.get("currency"), currency)
+            currency = _clean_str(fast.get("currency"), currency).upper()
         except Exception:
             pass
 
@@ -1018,6 +1093,7 @@ class StockDataFetcher:
         tk: yf.Ticker,
         current_price: float | None,
         price_meta_name: str = "",
+        trading_currency: str | None = None,
     ) -> dict[str, Any]:
         info: dict[str, Any] = {}
         try:
@@ -1068,6 +1144,14 @@ class StockDataFetcher:
         if market_cap is None and current_price is not None and shares is not None and shares > 0:
             market_cap = current_price * shares
 
+        inferred_ccy = _infer_currency_from_ticker(ticker)
+        resolved_ccy = _clean_str(
+            info.get("currency") or trading_currency, inferred_ccy
+        ).upper()
+        financial_ccy = _clean_str(
+            info.get("financialCurrency"), resolved_ccy
+        ).upper()
+
         profile = {
             "ticker": ticker,
             "company_name": company_name or ticker,
@@ -1075,6 +1159,8 @@ class StockDataFetcher:
             "industry": industry,
             "exchange": _clean_str(info.get("exchange"), ""),
             "quote_type": _clean_str(info.get("quoteType"), "EQUITY"),
+            "currency": resolved_ccy,
+            "financial_currency": financial_ccy,
             "market_cap": market_cap,
             "shares_outstanding": shares,
             "trailing_eps_info": _clean_float(info.get("trailingEps")),
@@ -1095,118 +1181,45 @@ class StockDataFetcher:
             "quarterly_statements": quarterly_records,
         }
 
-    def get_stock_data(
+    def _assemble_stock_data(
         self,
-        ticker: str,
-        force_refresh: bool = False,
-        allow_network: bool = True,
+        clean_ticker: str,
+        price_payload: dict[str, Any],
+        stmt_payload: dict[str, Any],
+        price_cached: bool,
+        statements_cached: bool,
+        price_fetched_at: str | None,
+        stmt_fetched_at: str | None,
+        used_stale_or_seed: bool,
+        seed_used: bool,
     ) -> dict[str, Any]:
-        """Return normalized stock data dict using SQLite cache, live APIs, and fallbacks."""
-        clean_ticker = ticker.strip().upper()
-        if not clean_ticker:
-            raise DataFetchError("Ticker symbol cannot be empty.")
-
-        price_payload = None
-        price_fetched_at = None
-        price_cached = False
-        stmt_payload = None
-        stmt_fetched_at = None
-        statements_cached = False
-        used_stale_or_seed = False
-        seed_used = False
-
-        if not force_refresh:
-            price_payload, price_fetched_at = self._read_cache(
-                "price_cache", clean_ticker, PRICE_TTL
-            )
-            if price_payload is not None:
-                price_cached = True
-            stmt_payload, stmt_fetched_at = self._read_cache(
-                "statements_cache", clean_ticker, STATEMENTS_TTL
-            )
-            if stmt_payload is not None:
-                statements_cached = True
-
-        session: cffi_requests.Session | None = None
-        tk: yf.Ticker | None = None
-
-        def _get_ticker_handle() -> tuple[cffi_requests.Session, yf.Ticker]:
-            nonlocal session, tk
-            if session is None or tk is None:
-                session = _build_cffi_session(IMPERSONATE_PROFILES[0])
-                tk = yf.Ticker(clean_ticker, session=session)
-            return session, tk
-
-        if price_payload is None:
-            if allow_network:
-                try:
-                    sess, ticker_obj = _get_ticker_handle()
-                    price_payload = self._fetch_price_payload(clean_ticker, ticker_obj, sess)
-                    price_fetched_at = self._write_cache(
-                        "price_cache", clean_ticker, price_payload
-                    )
-                except Exception:
-                    price_payload = None
-
-            if price_payload is None:
-                stale_p, stale_p_dt = self._read_cache("price_cache", clean_ticker, None)
-                if stale_p is not None:
-                    price_payload, price_fetched_at = stale_p, stale_p_dt
-                    price_cached = True
-                    used_stale_or_seed = True
-                else:
-                    seed = self._load_seed_snapshot(clean_ticker)
-                    if seed is not None:
-                        price_payload = seed["price"]
-                        price_fetched_at = seed["price_fetched_at"]
-                        price_cached = True
-                        used_stale_or_seed = True
-                        seed_used = True
-
-        if price_payload is None:
-            raise DataFetchError(
-                f"Unable to load price data for '{clean_ticker}' (live rate-limited and no local cache)."
-            )
-
-        if stmt_payload is None:
-            if allow_network:
-                try:
-                    _, ticker_obj = _get_ticker_handle()
-                    stmt_payload = self._fetch_statements_payload(
-                        clean_ticker,
-                        ticker_obj,
-                        price_payload.get("current_price"),
-                        price_payload.get("meta_name", ""),
-                    )
-                    stmt_fetched_at = self._write_cache(
-                        "statements_cache", clean_ticker, stmt_payload
-                    )
-                except Exception:
-                    stmt_payload = None
-
-            if stmt_payload is None:
-                stale_s, stale_s_dt = self._read_cache("statements_cache", clean_ticker, None)
-                if stale_s is not None:
-                    stmt_payload, stmt_fetched_at = stale_s, stale_s_dt
-                    statements_cached = True
-                    used_stale_or_seed = True
-                else:
-                    seed = self._load_seed_snapshot(clean_ticker)
-                    if seed is not None:
-                        stmt_payload = seed["statements"]
-                        stmt_fetched_at = seed["statements_fetched_at"]
-                        statements_cached = True
-                        used_stale_or_seed = True
-                        seed_used = True
-
-        if stmt_payload is None:
-            raise DataFetchError(
-                f"Unable to load financial statements for '{clean_ticker}' from Yahoo Finance or SEC EDGAR."
-            )
-
         profile = dict(stmt_payload["profile"])
         if profile.get("market_cap") is None:
             profile["market_cap"] = price_payload.get("market_cap")
+
+        inferred_ccy = _infer_currency_from_ticker(clean_ticker)
+        trading_ccy = _clean_str(
+            profile.get("currency") or price_payload.get("currency"), inferred_ccy
+        ).upper()
+        # Preserve fast_info / v8 trading currency when profile lacked one.
+        if price_payload.get("currency") and not profile.get("currency"):
+            trading_ccy = _clean_str(price_payload.get("currency"), inferred_ccy).upper()
+        financial_ccy = _clean_str(
+            profile.get("financial_currency"), trading_ccy
+        ).upper()
+        currency_mismatch = financial_ccy != trading_ccy
+
+        annual_records = stmt_payload.get("annual_statements", [])
+        quarterly_records = stmt_payload.get("quarterly_statements", [])
+        latest_stmt_date, latest_stmt_label = _extract_latest_statement_meta(
+            annual_records, quarterly_records
+        )
+
+        profile["currency"] = trading_ccy
+        profile["financial_currency"] = financial_ccy
+        profile["currency_mismatch"] = currency_mismatch
+        profile["latest_statement_date"] = latest_stmt_date
+        profile["latest_statement_label"] = latest_stmt_label
 
         stmt_source = profile.get("source_tag", "yahoo_live")
         if seed_used:
@@ -1230,16 +1243,269 @@ class StockDataFetcher:
                 "market_cap": profile.get("market_cap"),
                 "fifty_two_week_high": price_payload.get("fifty_two_week_high"),
                 "fifty_two_week_low": price_payload.get("fifty_two_week_low"),
-                "currency": price_payload.get("currency", "USD"),
+                "currency": trading_ccy,
+                "financial_currency": financial_ccy,
+                "currency_mismatch": currency_mismatch,
             },
             "price_history_5y": price_payload.get("price_history_5y", []),
-            "annual_statements": stmt_payload.get("annual_statements", []),
-            "quarterly_statements": stmt_payload.get("quarterly_statements", []),
+            "annual_statements": annual_records,
+            "quarterly_statements": quarterly_records,
             "cache_status": {
                 "price_cached": price_cached,
                 "statements_cached": statements_cached,
                 "price_fetched_at": price_fetched_at,
                 "statements_fetched_at": stmt_fetched_at,
                 "data_source": data_source,
+                "latest_statement_date": latest_stmt_date,
+                "latest_statement_label": latest_stmt_label,
             },
         }
+
+    def get_quote_snapshot(
+        self,
+        ticker: str,
+        force_refresh: bool = False,
+        allow_network: bool = True,
+    ) -> dict[str, Any]:
+        """Fetch or load quote + 5Y weekly price payload (15-min Streamlit TTL / 24h SQLite)."""
+        clean_ticker = ticker.strip().upper()
+        if not clean_ticker:
+            raise DataFetchError("Ticker symbol cannot be empty.")
+
+        price_payload = None
+        price_fetched_at = None
+        price_cached = False
+        used_stale = False
+        seed_used = False
+
+        if not force_refresh:
+            price_payload, price_fetched_at = self._read_cache(
+                "price_cache", clean_ticker, PRICE_TTL
+            )
+            if price_payload is not None:
+                price_cached = True
+
+        if price_payload is None:
+            if allow_network:
+                try:
+                    sess = _build_cffi_session(IMPERSONATE_PROFILES[0])
+                    ticker_obj = yf.Ticker(clean_ticker, session=sess)
+                    price_payload = self._fetch_price_payload(clean_ticker, ticker_obj, sess)
+                    price_fetched_at = self._write_cache(
+                        "price_cache", clean_ticker, price_payload
+                    )
+                except Exception:
+                    price_payload = None
+
+            if price_payload is None:
+                stale_p, stale_p_dt = self._read_cache("price_cache", clean_ticker, None)
+                if stale_p is not None:
+                    price_payload, price_fetched_at = stale_p, stale_p_dt
+                    price_cached = True
+                    used_stale = True
+                else:
+                    seed = self._load_seed_snapshot(clean_ticker)
+                    if seed is not None:
+                        price_payload = seed["price"]
+                        price_fetched_at = seed["price_fetched_at"]
+                        price_cached = True
+                        used_stale = True
+                        seed_used = True
+
+        if price_payload is None:
+            raise DataFetchError(
+                f"ไม่พบข้อมูลราคาของ '{clean_ticker}' หรือถูกจำกัดการเข้าถึงชั่วคราว"
+            )
+
+        return {
+            "payload": price_payload,
+            "fetched_at": price_fetched_at,
+            "cached": price_cached,
+            "used_stale": used_stale,
+            "seed_used": seed_used,
+        }
+
+    def get_statements_snapshot(
+        self,
+        ticker: str,
+        force_refresh: bool = False,
+        allow_network: bool = True,
+        current_price: float | None = None,
+        meta_name: str = "",
+        trading_currency: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch or load 5Y financial statements payload (24h Streamlit TTL / 7d SQLite)."""
+        clean_ticker = ticker.strip().upper()
+        if not clean_ticker:
+            raise DataFetchError("Ticker symbol cannot be empty.")
+
+        stmt_payload = None
+        stmt_fetched_at = None
+        statements_cached = False
+        used_stale = False
+        seed_used = False
+
+        if not force_refresh:
+            stmt_payload, stmt_fetched_at = self._read_cache(
+                "statements_cache", clean_ticker, STATEMENTS_TTL
+            )
+            if stmt_payload is not None:
+                statements_cached = True
+
+        if stmt_payload is None:
+            if allow_network:
+                try:
+                    sess = _build_cffi_session(IMPERSONATE_PROFILES[0])
+                    ticker_obj = yf.Ticker(clean_ticker, session=sess)
+                    stmt_payload = self._fetch_statements_payload(
+                        clean_ticker,
+                        ticker_obj,
+                        current_price,
+                        meta_name,
+                        trading_currency=trading_currency,
+                    )
+                    stmt_fetched_at = self._write_cache(
+                        "statements_cache", clean_ticker, stmt_payload
+                    )
+                except Exception:
+                    stmt_payload = None
+
+            if stmt_payload is None:
+                stale_s, stale_s_dt = self._read_cache("statements_cache", clean_ticker, None)
+                if stale_s is not None:
+                    stmt_payload, stmt_fetched_at = stale_s, stale_s_dt
+                    statements_cached = True
+                    used_stale = True
+                else:
+                    seed = self._load_seed_snapshot(clean_ticker)
+                    if seed is not None:
+                        stmt_payload = seed["statements"]
+                        stmt_fetched_at = seed["statements_fetched_at"]
+                        statements_cached = True
+                        used_stale = True
+                        seed_used = True
+
+        if stmt_payload is None:
+            raise DataFetchError(
+                f"ไม่พบข้อมูลรายงานการเงินของ '{clean_ticker}' จาก Yahoo Finance หรือ SEC EDGAR"
+            )
+
+        return {
+            "payload": stmt_payload,
+            "fetched_at": stmt_fetched_at,
+            "cached": statements_cached,
+            "used_stale": used_stale,
+            "seed_used": seed_used,
+        }
+
+    def get_stock_data(
+        self,
+        ticker: str,
+        force_refresh: bool = False,
+        allow_network: bool = True,
+    ) -> dict[str, Any]:
+        """Return normalized stock data dict using SQLite cache, live APIs, and fallbacks."""
+        clean_ticker = ticker.strip().upper()
+        if not clean_ticker:
+            raise DataFetchError("Ticker symbol cannot be empty.")
+
+        q_wrap = self.get_quote_snapshot(
+            clean_ticker, force_refresh=force_refresh, allow_network=allow_network
+        )
+        price_payload = q_wrap["payload"]
+
+        s_wrap = self.get_statements_snapshot(
+            clean_ticker,
+            force_refresh=force_refresh,
+            allow_network=allow_network,
+            current_price=price_payload.get("current_price"),
+            meta_name=price_payload.get("meta_name", ""),
+            trading_currency=price_payload.get("currency"),
+        )
+        stmt_payload = s_wrap["payload"]
+
+        return self._assemble_stock_data(
+            clean_ticker=clean_ticker,
+            price_payload=price_payload,
+            stmt_payload=stmt_payload,
+            price_cached=q_wrap["cached"],
+            statements_cached=s_wrap["cached"],
+            price_fetched_at=q_wrap["fetched_at"],
+            stmt_fetched_at=s_wrap["fetched_at"],
+            used_stale_or_seed=(q_wrap["used_stale"] or s_wrap["used_stale"]),
+            seed_used=(q_wrap["seed_used"] or s_wrap["seed_used"]),
+        )
+
+
+_SHARED_FETCHER: StockDataFetcher | None = None
+
+
+def _get_shared_fetcher() -> StockDataFetcher:
+    global _SHARED_FETCHER
+    if _SHARED_FETCHER is None:
+        _SHARED_FETCHER = StockDataFetcher()
+    return _SHARED_FETCHER
+
+
+@_st_cache_data(ttl=900)
+def fetch_quote_snapshot(ticker: str, cache_bust: int = 0) -> dict[str, Any]:
+    """Cached 15-min quote & 5Y price snapshot for Streamlit Cloud."""
+    return _get_shared_fetcher().get_quote_snapshot(
+        ticker, force_refresh=(cache_bust > 0), allow_network=True
+    )
+
+
+@_st_cache_data(ttl=86400)
+def fetch_financial_statements(
+    ticker: str,
+    cache_bust: int = 0,
+    current_price: float | None = None,
+    meta_name: str = "",
+    trading_currency: str | None = None,
+) -> dict[str, Any]:
+    """Cached 24-hr 5Y financial statements snapshot for Streamlit Cloud."""
+    return _get_shared_fetcher().get_statements_snapshot(
+        ticker,
+        force_refresh=(cache_bust > 0),
+        allow_network=True,
+        current_price=current_price,
+        meta_name=meta_name,
+        trading_currency=trading_currency,
+    )
+
+
+@_st_cache_data(ttl=86400)
+def fetch_peer_stock_data(ticker: str, cache_bust: int = 0) -> dict[str, Any]:
+    """Dedicated 24-hr cached loader for lazy-loaded Peer Comparison rows."""
+    return _get_shared_fetcher().get_stock_data(
+        ticker, force_refresh=(cache_bust > 0), allow_network=True
+    )
+
+
+def fetch_combined_stock_data(ticker: str, cache_bust: int = 0) -> dict[str, Any]:
+    """Combine 15-min quote cache + 24-hr statements cache into normalized stock_data."""
+    clean_ticker = ticker.strip().upper()
+    if not clean_ticker:
+        raise DataFetchError("กรุณาระบุชื่อย่อหุ้น (Ticker Symbol)")
+
+    fetcher = _get_shared_fetcher()
+    q_wrap = fetch_quote_snapshot(clean_ticker, cache_bust=cache_bust)
+    price_payload = q_wrap["payload"]
+    s_wrap = fetch_financial_statements(
+        clean_ticker,
+        cache_bust=cache_bust,
+        current_price=price_payload.get("current_price"),
+        meta_name=price_payload.get("meta_name", ""),
+        trading_currency=price_payload.get("currency"),
+    )
+    return fetcher._assemble_stock_data(
+        clean_ticker=clean_ticker,
+        price_payload=price_payload,
+        stmt_payload=s_wrap["payload"],
+        price_cached=q_wrap["cached"],
+        statements_cached=s_wrap["cached"],
+        price_fetched_at=q_wrap["fetched_at"],
+        stmt_fetched_at=s_wrap["fetched_at"],
+        used_stale_or_seed=(q_wrap["used_stale"] or s_wrap["used_stale"]),
+        seed_used=(q_wrap["seed_used"] or s_wrap["seed_used"]),
+    )
