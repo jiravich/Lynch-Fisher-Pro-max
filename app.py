@@ -43,7 +43,7 @@ from theme import (
 st.set_page_config(
     page_title="Lynch / Fisher Equity Research",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",
 )
 
 inject_theme_css()
@@ -269,12 +269,13 @@ def main() -> None:
 
     if analysis.get("cache_status", {}).get("data_source") in {"stale_cache", "seed_snapshot"}:
         st.markdown(
-            f"<div style='margin-top:0.55rem;padding:0.42rem 0.8rem;border-left:3px solid {PALETTE['amber']};"
-            f"background:rgba(217,119,6,0.06);border-top:1px solid rgba(217,119,6,0.18);"
-            f"border-right:1px solid rgba(217,119,6,0.18);border-bottom:1px solid rgba(217,119,6,0.18);"
-            f"font-size:0.78rem;color:{PALETTE['text_muted']};'>"
-            f"<span style='color:{PALETTE['amber']};font-weight:600;'>FALLBACK DATA:</span> "
-            f"Yahoo Finance ถูกจำกัดอัตราการเรียกจาก Cloud IP ชั่วคราว ระบบกำลังแสดงข้อมูลจากแคชล่าสุด/ฐานข้อมูลตั้งต้น (Snapshot) กด Refresh เพื่อลองดึงใหม่"
+            f"<div class='alert-strip'>"
+            f"<div class='alert-item alert-warning'>"
+            f"<div class='alert-left'>"
+            f"<span style='color:{PALETTE['amber']};font-weight:600;'>FALLBACK DATA</span>"
+            f"<span style='color:{PALETTE['text_muted']};'>Yahoo Finance ถูกจำกัดอัตราการเรียกจาก Cloud IP ชั่วคราว ระบบกำลังแสดงข้อมูลจากแคชล่าสุด/ฐานข้อมูลตั้งต้น (Snapshot) กด Refresh เพื่อลองดึงใหม่</span>"
+            f"</div>"
+            f"</div>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -337,7 +338,7 @@ def main() -> None:
             weight_pct=val_pillar["effective_category_weight"],
         )
         fig_fv = build_lynch_fair_value_chart(analysis)
-        st.plotly_chart(fig_fv, width="stretch", theme=None, config=PLOTLY_CONFIG)
+        st.plotly_chart(fig_fv, use_container_width=True, theme=None, config=PLOTLY_CONFIG)
 
         g_col1, g_col2 = st.columns([0.92, 0.08], gap="small")
         with g_col1:
@@ -416,7 +417,7 @@ def main() -> None:
         st.caption("Margin Trajectory 5Y (%): Gross & Operating / Pre-Tax Margin")
         st.plotly_chart(
             build_margin_trend_chart(analysis),
-            width="stretch",
+            use_container_width=True,
             theme=None,
             config=PLOTLY_CONFIG,
         )
@@ -429,7 +430,7 @@ def main() -> None:
         st.caption(eff_title)
         st.plotly_chart(
             build_capital_efficiency_chart(analysis),
-            width="stretch",
+            use_container_width=True,
             theme=None,
             config=PLOTLY_CONFIG,
         )

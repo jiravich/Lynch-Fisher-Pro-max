@@ -34,6 +34,7 @@ FONT_MONO = "'IBM Plex Mono', 'JetBrains Mono', ui-monospace, monospace"
 PLOTLY_CONFIG: dict[str, Any] = {
     "displayModeBar": False,
     "responsive": True,
+    "scrollZoom": False,
 }
 
 # Crisp 1.5px stroke monochrome SVG icons (zero emojis).
@@ -702,10 +703,12 @@ def inject_theme_css() -> None:
         .peer-table-wrap {{
             width: 100%;
             overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
             margin-top: 0.35rem;
         }}
         .peer-table {{
             width: 100%;
+            min-width: 680px;
             border-collapse: collapse;
             font-size: 0.82rem;
         }}
@@ -778,6 +781,240 @@ def inject_theme_css() -> None:
             color: var(--text-muted);
             margin-top: 0.15rem;
             line-height: 1.35;
+        }}
+
+        /* Smooth vertical page scroll over touch Plotly charts */
+        .js-plotly-plot,
+        .js-plotly-plot .plotly,
+        .js-plotly-plot .draglayer {{
+            touch-action: pan-y !important;
+        }}
+
+        /* Mobile responsive refinements (<= 768px) */
+        @media (max-width: 768px) {{
+            body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {{
+                overflow-x: hidden !important;
+                font-size: 14px !important;
+            }}
+            .block-container {{
+                padding: 0.75rem 0.85rem 2.5rem 0.85rem !important;
+            }}
+
+            /* Hero Bar: 2 compact rows (Row 1: Ticker + Price + Change, Row 2: 2x2 KPI grid) */
+            .hero-bar {{
+                flex-direction: column;
+                align-items: stretch;
+                gap: 0.75rem;
+                padding: 0.25rem 0 0.85rem 0;
+            }}
+            .hero-left {{
+                display: flex;
+                flex-direction: row;
+                flex-wrap: wrap;
+                justify-content: space-between;
+                align-items: baseline;
+                flex: 1 1 auto;
+                min-width: 0;
+                gap: 0.28rem 0.6rem;
+            }}
+            .hero-identity {{
+                display: contents;
+            }}
+            .hero-ticker {{
+                order: 1;
+                font-size: 1.5rem;
+            }}
+            .hero-price-row {{
+                order: 2;
+                margin-top: 0;
+                gap: 0.45rem;
+                justify-content: flex-end;
+            }}
+            .hero-price {{
+                font-size: 1.38rem;
+            }}
+            .hero-change {{
+                font-size: 0.85rem;
+            }}
+            .hero-name {{
+                order: 3;
+                flex: 1 1 100%;
+                font-size: 0.92rem;
+            }}
+            .hero-meta {{
+                order: 4;
+                flex: 1 1 100%;
+                font-size: 0.82rem;
+                gap: 0.35rem;
+            }}
+            .hero-right {{
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.7rem 0.85rem;
+                padding-top: 0.7rem;
+                border-top: 1px solid var(--border-hairline);
+                width: 100%;
+            }}
+            .hero-kpi {{
+                border-left: none;
+                padding: 0;
+                white-space: normal;
+                min-width: 0;
+            }}
+            .hero-kpi-val {{
+                font-size: 1.3rem;
+            }}
+            .hero-kpi-sub {{
+                font-size: 0.78rem;
+            }}
+
+            /* Adapt 3/4/5-col metric grids into 2-col grid */
+            .data-strip,
+            .data-strip-3col {{
+                grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+                gap: 0.75rem 0.85rem !important;
+            }}
+            .data-strip-label {{
+                font-size: 0.75rem;
+            }}
+            .data-strip-val {{
+                font-size: 1.05rem;
+            }}
+
+            /* Alert & Red Flag bar clean wrapping */
+            .alert-item {{
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.35rem;
+                padding: 0.6rem 0.75rem;
+                font-size: 0.875rem;
+            }}
+            .alert-left {{
+                width: 100%;
+                overflow-wrap: anywhere;
+            }}
+
+            /* Section headers & metric rows readability */
+            .sec-header {{
+                flex-wrap: wrap;
+                gap: 0.3rem 0.75rem;
+            }}
+            .sec-title {{
+                font-size: 1rem;
+                white-space: normal;
+            }}
+            .sec-sub {{
+                display: block;
+                margin-left: 0;
+                margin-top: 2px;
+                font-size: 0.84rem;
+            }}
+            .sec-score {{
+                font-size: 0.95rem;
+            }}
+            .metric-row-top {{
+                flex-wrap: wrap;
+                gap: 0.25rem 0.5rem;
+            }}
+            .metric-label-en {{
+                font-size: 0.9rem;
+            }}
+            .metric-label-th {{
+                font-size: 0.82rem;
+            }}
+            .metric-val {{
+                font-size: 0.95rem;
+            }}
+            .metric-score-badge {{
+                font-size: 0.84rem;
+            }}
+            .metric-wt {{
+                font-size: 0.78rem;
+            }}
+            .fisher-item-title {{
+                font-size: 0.9rem;
+            }}
+            .fisher-item-desc {{
+                font-size: 0.82rem;
+            }}
+
+            /* Touch targets >= 42px */
+            .stButton > button,
+            .stFormSubmitButton > button,
+            [data-testid="stSelectbox"] > div,
+            [data-testid="stSelectbox"] > div > div,
+            [data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+            div[data-baseweb="select"] > div,
+            .scuttle-link,
+            [data-testid="stExpander"] summary {{
+                min-height: 44px !important;
+            }}
+            [data-testid="stSelectbox"] > div > div,
+            [data-testid="stSelectbox"] div[data-baseweb="select"] > div {{
+                height: auto !important;
+                min-height: 44px !important;
+            }}
+            .stTextInput input {{
+                min-height: 44px !important;
+                font-size: 16px !important;
+            }}
+            .stTextArea textarea {{
+                font-size: 16px !important;
+            }}
+            .stTabs [data-baseweb="tab-list"],
+            [data-baseweb="tab-list"],
+            [role="tablist"] {{
+                overflow-x: auto;
+                flex-wrap: nowrap;
+                -webkit-overflow-scrolling: touch;
+                gap: 0.9rem;
+                min-height: 44px !important;
+                height: auto !important;
+            }}
+            .stTabs [data-baseweb="tab"],
+            [data-testid="stTabs"] [role="tab"],
+            [role="tab"],
+            [data-baseweb="tab"] {{
+                min-height: 44px !important;
+                height: 44px !important;
+                padding: 0.5rem 0.2rem !important;
+                font-size: 0.875rem !important;
+                white-space: nowrap;
+                flex-shrink: 0;
+            }}
+            [data-testid="stRadio"] div[role="radiogroup"] {{
+                display: flex !important;
+                flex-direction: row !important;
+                flex-wrap: wrap !important;
+                gap: 0.5rem !important;
+            }}
+            [data-testid="stRadio"] div[role="radiogroup"] label {{
+                min-height: 42px !important;
+                min-width: 52px !important;
+                padding: 0.35rem 0.75rem !important;
+                border: 1px solid var(--border-hairline);
+                border-radius: 6px;
+                display: inline-flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+            }}
+            [data-testid="stPopover"] {{
+                justify-content: flex-start;
+                padding-top: 0.25rem;
+                padding-bottom: 0.25rem;
+            }}
+            [data-testid="stPopover"] button {{
+                width: 42px !important;
+                min-width: 42px !important;
+                max-width: 42px !important;
+                height: 42px !important;
+                min-height: 42px !important;
+                font-size: 14px !important;
+            }}
+            div[data-testid="stPopoverBody"] {{
+                max-width: calc(100vw - 1.75rem) !important;
+                font-size: 0.875rem !important;
+            }}
         }}
         </style>
         """
@@ -1174,13 +1411,14 @@ def render_scuttlebutt_links_html(ticker: str, company_name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _base_plotly_layout(height: int = 310, right_margin: int = 125) -> dict[str, Any]:
+def _base_plotly_layout(height: int = 240) -> dict[str, Any]:
     return {
         "height": height,
         "paper_bgcolor": "rgba(0,0,0,0)",
         "plot_bgcolor": "rgba(0,0,0,0)",
         "showlegend": False,
-        "margin": dict(l=52, r=right_margin, t=18, b=28),
+        "dragmode": False,
+        "margin": dict(l=8, r=8, t=28, b=24),
         "font": dict(family=FONT_MONO, size=11, color=PALETTE["text_muted"]),
         "hovermode": "x unified",
         "hoverlabel": dict(
@@ -1193,6 +1431,7 @@ def _base_plotly_layout(height: int = 310, right_margin: int = 125) -> dict[str,
             zeroline=False,
             showline=True,
             linecolor=PALETTE["hairline"],
+            fixedrange=True,
             automargin=True,
             tickfont=dict(family=FONT_MONO, size=10, color=PALETTE["text_muted"]),
         ),
@@ -1202,40 +1441,20 @@ def _base_plotly_layout(height: int = 310, right_margin: int = 125) -> dict[str,
             gridwidth=1,
             zeroline=False,
             showline=False,
+            fixedrange=True,
             automargin=True,
             tickfont=dict(family=FONT_MONO, size=10, color=PALETTE["text_muted"]),
         ),
     }
 
 
-def _end_annotation_yshifts(
-    values: list[float], min_gap_px: int = 18
-) -> list[int]:
-    """Avoid overlapping direct end-of-line labels when values converge."""
-    if len(values) < 2:
-        return [0] * len(values)
-    v_min, v_max = min(values), max(values)
-    span = max(v_max - v_min, 1e-6)
-    shifts = [0] * len(values)
-    if len(values) == 2:
-        rel_diff = abs(values[0] - values[1]) / span
-        if rel_diff < 0.08 or abs(values[0] - values[1]) == 0:
-            if values[0] >= values[1]:
-                shifts = [min_gap_px // 2, -(min_gap_px // 2)]
-            else:
-                shifts = [-(min_gap_px // 2), min_gap_px // 2]
-    return shifts
-
-
 def build_lynch_fair_value_chart(analysis: dict[str, Any]) -> go.Figure:
-    """5Y Price vs Peter Lynch Fair Value Line with direct end-of-line annotations."""
+    """5Y Price vs Peter Lynch Fair Value Line with non-clipping header annotations."""
     fig = go.Figure()
-    layout = _base_plotly_layout(height=320, right_margin=132)
+    layout = _base_plotly_layout(height=265)
 
     series = analysis["valuation_summary"].get("lynch_fair_value_series", [])
     price_hist = analysis.get("valuation_summary", {})
-    raw_price_history = []
-    # Reconstruct price series from fair_value_series if available, else fallback.
     if series:
         dates = [pt["date"] for pt in series]
         prices = [pt["price"] for pt in series]
@@ -1269,7 +1488,18 @@ def build_lynch_fair_value_chart(analysis: dict[str, Any]) -> go.Figure:
 
     valid_fv = [(d, v) for d, v in zip(dates, fvs) if v is not None]
     last_price = prices[-1]
-    last_date = dates[-1]
+
+    fig.add_annotation(
+        xref="paper",
+        yref="paper",
+        x=0.0,
+        y=1.02,
+        xanchor="left",
+        yanchor="bottom",
+        text=f"Price ${last_price:,.2f}",
+        showarrow=False,
+        font=dict(family=FONT_MONO, size=11, color=PALETTE["text_primary"]),
+    )
 
     if valid_fv:
         p2fv = price_hist.get("price_to_fair_value")
@@ -1291,51 +1521,27 @@ def build_lynch_fair_value_chart(analysis: dict[str, Any]) -> go.Figure:
             )
         )
 
-        last_fv_date, last_fv_val = valid_fv[-1]
-        y_all = prices + [v for _, v in valid_fv]
-        y_span = max(max(y_all) - min(y_all), 1e-6)
-        shifts = [0, 0]
-        if abs(last_price - last_fv_val) / y_span < 0.08:
-            shifts = [10, -10] if last_price >= last_fv_val else [-10, 10]
-
+        last_fv_val = valid_fv[-1][1]
         fig.add_annotation(
-            x=last_date,
-            y=last_price,
-            xanchor="left",
-            xshift=8,
-            yshift=shifts[0],
-            text=f"Price ${last_price:,.2f}",
-            showarrow=False,
-            font=dict(family=FONT_MONO, size=11, color=PALETTE["text_primary"]),
-        )
-        fig.add_annotation(
-            x=last_fv_date,
-            y=last_fv_val,
-            xanchor="left",
-            xshift=8,
-            yshift=shifts[1],
+            xref="paper",
+            yref="paper",
+            x=1.0,
+            y=1.02,
+            xanchor="right",
+            yanchor="bottom",
             text=f"Lynch FV ${last_fv_val:,.2f}",
             showarrow=False,
             font=dict(family=FONT_MONO, size=11, color=fv_color),
         )
     else:
         fig.add_annotation(
-            x=last_date,
-            y=last_price,
-            xanchor="left",
-            xshift=8,
-            text=f"Price ${last_price:,.2f}",
-            showarrow=False,
-            font=dict(family=FONT_MONO, size=11, color=PALETTE["text_primary"]),
-        )
-        fig.add_annotation(
-            text="Lynch FV: N/A (g <= 0 or EPS <= 0)",
             xref="paper",
             yref="paper",
-            x=0.01,
-            y=0.96,
-            xanchor="left",
-            yanchor="top",
+            x=1.0,
+            y=1.02,
+            xanchor="right",
+            yanchor="bottom",
+            text="Lynch FV: N/A (g <= 0)",
             showarrow=False,
             font=dict(family=FONT_MONO, size=10, color=PALETTE["amber"]),
         )
@@ -1346,16 +1552,17 @@ def build_lynch_fair_value_chart(analysis: dict[str, Any]) -> go.Figure:
 
 
 def build_margin_trend_chart(analysis: dict[str, Any]) -> go.Figure:
-    """5Y Gross Margin & Operating/Pre-Tax Margin lines with direct end labels."""
+    """5Y Gross Margin & Operating/Pre-Tax Margin lines with clean header annotations."""
     fig = go.Figure()
-    layout = _base_plotly_layout(height=275, right_margin=138)
+    layout = _base_plotly_layout(height=235)
     quality = analysis["quality_summary"]
     gm_hist = quality.get("gross_margin_history", [])
     om_hist = quality.get("operating_margin_history", [])
     om_label = quality.get("operating_margin_label", "Operating Margin")
 
-    endpoints: list[tuple[str, float, str, str]] = []
+    has_any = False
     if gm_hist:
+        has_any = True
         gm_x = [str(p["date"])[:4] for p in gm_hist]
         gm_y = [p["margin"] * 100.0 for p in gm_hist]
         fig.add_trace(
@@ -1369,9 +1576,20 @@ def build_margin_trend_chart(analysis: dict[str, Any]) -> go.Figure:
                 hovertemplate="Gross Margin: %{y:.1f}%<extra></extra>",
             )
         )
-        endpoints.append((gm_x[-1], gm_y[-1], f"Gross {gm_y[-1]:.1f}%", PALETTE["text_primary"]))
+        fig.add_annotation(
+            xref="paper",
+            yref="paper",
+            x=0.0,
+            y=1.02,
+            xanchor="left",
+            yanchor="bottom",
+            text=f"Gross {gm_y[-1]:.1f}%",
+            showarrow=False,
+            font=dict(family=FONT_MONO, size=11, color=PALETTE["text_primary"]),
+        )
 
     if om_hist:
+        has_any = True
         om_x = [str(p["date"])[:4] for p in om_hist]
         om_y = [p["margin"] * 100.0 for p in om_hist]
         short_lbl = "Pre-Tax" if "Pre-Tax" in om_label else "Net" if "Net" in om_label else "Operating"
@@ -1386,22 +1604,19 @@ def build_margin_trend_chart(analysis: dict[str, Any]) -> go.Figure:
                 hovertemplate=f"{om_label}: %{{y:.1f}}%<extra></extra>",
             )
         )
-        endpoints.append((om_x[-1], om_y[-1], f"{short_lbl} {om_y[-1]:.1f}%", PALETTE["emerald"]))
+        fig.add_annotation(
+            xref="paper",
+            yref="paper",
+            x=1.0 if gm_hist else 0.0,
+            y=1.02,
+            xanchor="right" if gm_hist else "left",
+            yanchor="bottom",
+            text=f"{short_lbl} {om_y[-1]:.1f}%",
+            showarrow=False,
+            font=dict(family=FONT_MONO, size=11, color=PALETTE["emerald"]),
+        )
 
-    if endpoints:
-        shifts = _end_annotation_yshifts([e[1] for e in endpoints])
-        for (x_end, y_end, txt, col), sh in zip(endpoints, shifts):
-            fig.add_annotation(
-                x=x_end,
-                y=y_end,
-                xanchor="left",
-                xshift=8,
-                yshift=sh,
-                text=txt,
-                showarrow=False,
-                font=dict(family=FONT_MONO, size=11, color=col),
-            )
-    else:
+    if not has_any:
         fig.add_annotation(
             text="No margin history available",
             xref="paper",
@@ -1420,7 +1635,7 @@ def build_margin_trend_chart(analysis: dict[str, Any]) -> go.Figure:
 def build_capital_efficiency_chart(analysis: dict[str, Any]) -> go.Figure:
     """5Y ROIC (or ROE for Financials) vs Hurdle benchmark line."""
     fig = go.Figure()
-    layout = _base_plotly_layout(height=275, right_margin=125)
+    layout = _base_plotly_layout(height=235)
     overlay = analysis["sector_overlay"]["overlay"]
     quality = analysis["quality_summary"]
 
@@ -1469,28 +1684,24 @@ def build_capital_efficiency_chart(analysis: dict[str, Any]) -> go.Figure:
             )
         )
 
-        all_y = ys + [hurdle]
-        span = max(max(all_y) - min(all_y), 1e-6)
-        sh_main, sh_hurdle = (0, 0)
-        if abs(last_y - hurdle) / span < 0.10:
-            sh_main, sh_hurdle = (10, -10) if last_y >= hurdle else (-10, 10)
-
         fig.add_annotation(
-            x=xs[-1],
-            y=last_y,
+            xref="paper",
+            yref="paper",
+            x=0.0,
+            y=1.02,
             xanchor="left",
-            xshift=8,
-            yshift=sh_main,
+            yanchor="bottom",
             text=f"{metric_label} {last_y:.1f}%",
             showarrow=False,
             font=dict(family=FONT_MONO, size=11, color=line_col),
         )
         fig.add_annotation(
-            x=xs[-1],
-            y=hurdle,
-            xanchor="left",
-            xshift=8,
-            yshift=sh_hurdle,
+            xref="paper",
+            yref="paper",
+            x=1.0,
+            y=1.02,
+            xanchor="right",
+            yanchor="bottom",
             text=f"Hurdle {hurdle:.0f}%",
             showarrow=False,
             font=dict(family=FONT_MONO, size=10, color=PALETTE["text_muted"]),
