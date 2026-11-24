@@ -1,0 +1,23 @@
+# Python bytecode & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Environment & Streamlit secrets
+.env
+.env.*
+.streamlit/secrets.toml
+
+# Local SQLite cache & workspace databases
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# OS & editor files
+.DS_Store
+Thumbs.db
